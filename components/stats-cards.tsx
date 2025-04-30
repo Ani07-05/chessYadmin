@@ -12,12 +12,12 @@ export function StatsCards({ playerData }: StatsCardsProps) {
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
       <StatCard
         title="Rating on Join Date"
-        value={playerData.initialRating.toString()}
+        value={playerData?.initialRating?.toString() ?? 'N/A'} // Use optional chaining and nullish coalescing
         icon={<LineChart className="h-5 w-5 text-purple-500" />}
       />
       <StatCard
         title="Current Rating"
-        value={playerData.currentRating.toString()}
+        value={playerData?.currentRating?.toString() ?? 'N/A'} // Use optional chaining and nullish coalescing
         icon={<TrendingUp className="h-5 w-5 text-green-500" />}
       />
       <StatCard

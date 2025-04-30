@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  stockfish-server:
+    build:
+      context: ./stockfish-server # Path to the directory containing the Dockerfile
+      dockerfile: Dockerfile
+    container_name: stockfish-service # Optional: specify a container name
+    ports:
+      - "5000:5000" # Map host port 5000 to container port 5000
+    # Environment variables can be set here if needed,
+    # but STOCKFISH_PATH is already handled in the Dockerfile.
+    # environment:
+    #   - STOCKFISH_PATH=/usr/local/bin/stockfish
+    restart: unless-stopped # Optional: Restart policy

@@ -12,13 +12,13 @@ export interface GameData {
     rating: number
     result: string
   }
-  lastMove: string
-  lastMoveQuality: string
-  evaluation: string
-  bestMove: string
-  lastPositions: string[]
-  goodMovesCount: number
-  greatMovesCount: number
+  lastMove: string // Keep if used
+  lastMoveQuality: string // Keep if used
+  evaluation: string // Keep if used
+  bestMove: string // Keep if used
+  lastPositions: string[] // Keep if used
+  goodMovesCount: number // Keep if used by simulated analysis
+  greatMovesCount: number // Keep if used by simulated analysis
 }
 
 export interface ChessComGame {
@@ -46,49 +46,65 @@ export interface ChessComGame {
   }
 }
 
+/**
+ * Represents the analysis result from the Stockfish API.
+ * Structure might need adjustment based on the specific API implementation.
+ */
 export interface StockfishAnalysis {
   success: boolean
-  evaluation: number
-  bestmove: string // Changed from 'best' to 'bestmove'
-  mate?: number | null
-  continuation: string
+  evaluation: number | null // CP score (e.g., 1.23) or large number for mate (e.g., 999)
+  mate: number | null // Mate in X moves (e.g., 3 or -2)
+  bestmove: string // Best move in UCI format (e.g., "e2e4")
+  continuation?: string // Optional: Sequence of moves following best move
+  // requestedFen?: string; // Optional: FEN that was requested (added client-side if needed)
+  error?: string // Optional: Error message if success is false
 }
 
 export interface MoveAnalysis {
-  gameUrl: string | URL
-  move: string
-  quality: string
-  fen: string
+  move: string; // SAN format
+  evaluation?: number; // Optional evaluation score
+  mate?: number; // Optional mate-in-X score
+  bestMove?: string; // Best move in SAN format
+  quality?: "brilliant" | "great" | "good" | "inaccuracy" | "mistake" | "blunder" | "best";
 }
 
-// Update PlayerData to make totalGreatMoves nullable
+// Add this new interface
+export interface HighlightedMove {
+  gameUrl: string;
+  moveIndex: number; // Index in the game's history array
+  moveSan: string; // The move played (e.g., "Nf3")
+  fenBefore: string; // FEN string of the board *before* the move
+  evaluation: number | null; // Evaluation *after* the best move (or player's move if not best)
+  mate: number | null; // Mate score *after* the best move
+  quality: "brilliant" | "great";
+}
+
+// Updated PlayerData
 export interface PlayerData {
   username: string;
-  blitzRating: number | null; // Added: Current Blitz rating
-  levelsCrossed: number; // Keep for now, maybe base on blitzRating later?
-  totalGreatMoves: number | null; // Changed to nullable
-  currentLevel: number; // Keep for now, maybe base on blitzRating later?
-  todoForNextLevel: string; // Keep example text
-  puzzlePoints: number;
-  targetRating: number; // Keep for now, maybe base on blitzRating later?
-  targetPuzzlePoints: number;
-  targetGreatMoves: number; // Keep example target
-  requirements: {
-    elo: boolean;
-    puzzlePoints: boolean;
-    greatMoves: boolean; // Keep example check
-  };
-  // Array to hold analysis summary for recent games
-  recentGamesAnalysis: AnalyzedGameSummary[];
+  blitzRating: number | null; // Add blitz rating (nullable if fetch fails)
+  winRate: number; // Keep existing fields
+  averageOpponentRating: number;
+  totalGames: number;
+  totalWins: number;
+  totalLosses: number;
+  totalDraws: number;
+  // Replace simulated counts with actual analysis results
+  totalGreatMoves: number; // Total across analyzed games
+  totalBrilliantMoves: number; // Total across analyzed games
+  recentGamesAnalysis: AnalyzedGameSummary[]; // Analysis results for the last 5 games
+  initialRating?: number; // Add this line
+  currentRating: number | null; // Allow null
+  levelsCrossed: number; // Add this line
 }
 
-// Update AnalyzedGameSummary for basic display before analysis
+// Updated AnalyzedGameSummary
 export interface AnalyzedGameSummary {
   gameUrl: string;
-  fen: string; // Keep final FEN for potential display
-  greatMovesCount: number; // Renamed back from bestMovesCount
-  brilliantMovesCount: number; // Keep, will be 0 initially
-  // Add basic game info
+  fen: string; // Final FEN from game data
+  greatMovesCount: number; // Kept for backward compatibility or quick summary
+  brilliantMovesCount: number; // Kept for backward compatibility or quick summary
+  highlightedMoves: HighlightedMove[]; // Add this line to store detailed moves
   whiteUsername: string;
   blackUsername: string;
   whiteResult: string;
