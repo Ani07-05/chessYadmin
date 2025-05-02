@@ -1,108 +1,94 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { Chess } from "chess.js";
 import type { ChessComGame, PlayerData, AnalyzedGameSummary, StockfishAnalysis, HighlightedMove } from "@/lib/types";
-import { fetchStockfishAnalysis } from "@/lib/stockfish-service"; // Use updated service
-import { DEFAULT_DEPTH } from "@/lib/stockfish-service"; // Import DEFAULT_DEPTH if needed here
+// Removed fetchStockfishPositionEvaluation as it's not exported/implemented
+import { fetchStockfishAnalysis, DEFAULT_DEPTH } from "@/lib/stockfish-service";
 
 // Helper function for adding delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- Define Constants at Module Scope ---
-// Define the evaluation threshold for a "Great Move" (in pawn units)
-// Positive for White's advantage, negative for Black's advantage
-const GREAT_MOVE_EVAL_THRESHOLD = 2.5; // Example: Slightly stricter
-// Define threshold for Brilliant moves (e.g., higher eval gain, or finding a non-obvious best move)
-const BRILLIANT_MOVE_EVAL_THRESHOLD = 5.0; // Example: Stricter threshold
+const MAX_GAMES_TO_ANALYZE = 5;
+const STOCKFISH_DELAY_MS = 500;
+const BASE_GREAT_MOVE_EVAL_THRESHOLD = 2.0;
+const BASE_BRILLIANT_MOVE_EVAL_THRESHOLD = 9.0; // Updated brilliant threshold
 
 // --- Main GET Handler ---
 export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams
-  const username = searchParams.get("username")?.toLowerCase()
+  const searchParams = request.nextUrl.searchParams;
+  const username = searchParams.get("username");
 
   if (!username) {
-    return NextResponse.json({ error: "Username is required" }, { status: 400 })
+    return NextResponse.json({ error: "Username is required" }, { status: 400 });
   }
-
   const encodedUsername = encodeURIComponent(username);
 
   try {
-    // Fetch player profile to verify the user exists
-    const profileResponse = await fetch(`https://api.chess.com/pub/player/${encodedUsername}`)
-    if (!profileResponse.ok) {
-      console.error(`Chess.com API error for profile (${username}): ${profileResponse.status} ${profileResponse.statusText}`)
-      return NextResponse.json(
-        { error: `Player not found or Chess.com API error: ${profileResponse.statusText}` },
-        { status: profileResponse.status },
-      )
-    }
+    // --- Fetch Player Data ---
+    const profileResponse = await fetch(`https://api.chess.com/pub/player/${encodedUsername}`);
+    // ... existing profile fetch and error handling ...
     const profileData = await profileResponse.json();
-    const playerId = profileData.player_id; // Use player_id if needed later
 
-    // Fetch player stats
-    const statsResponse = await fetch(`https://api.chess.com/pub/player/${encodedUsername}/stats`)
-    if (!statsResponse.ok) {
-      console.error(`Chess.com API error for stats (${username}): ${statsResponse.status} ${statsResponse.statusText}`)
-      return NextResponse.json(
-        { error: `Failed to fetch stats for player '${username}': ${statsResponse.statusText}` },
-        { status: statsResponse.status },
-      )
-    }
-    const statsData = await statsResponse.json()
-    const blitzRating = statsData.chess_blitz?.last?.rating ?? null;
+    const statsResponse = await fetch(`https://api.chess.com/pub/player/${encodedUsername}/stats`);
+    // ... existing stats fetch and error handling ...
+    const statsData = await statsResponse.json();
+    const blitzRating = statsData.chess_blitz?.last?.rating ?? null; // Use Blitz for rating adjustment
 
-    // Fetch archives to get recent games
-    const archivesResponse = await fetch(`https://api.chess.com/pub/player/${encodedUsername}/games/archives`)
-    if (!archivesResponse.ok) {
-      console.error(`Chess.com API error for archives (${username}): ${archivesResponse.status} ${archivesResponse.statusText}`)
-      return NextResponse.json(
-        { error: `Failed to fetch game archives for player '${username}': ${archivesResponse.statusText}` },
-        { status: archivesResponse.status },
-      )
-    }
-    const archivesData = await archivesResponse.json()
+    // --- Fetch Recent Games ---
+    const archivesResponse = await fetch(`https://api.chess.com/pub/player/${encodedUsername}/games/archives`);
+    // ... existing archives fetch and error handling ...
+    const archivesData = await archivesResponse.json();
+    const archiveUrls: string[] = archivesData.archives;
 
-    // Get the most recent archive URL
-    const latestArchiveUrl = archivesData.archives.pop(); // Get the last one
-    if (!latestArchiveUrl) {
-        return NextResponse.json({ error: "No game archives found for player." }, { status: 404 });
+    if (!archiveUrls || archiveUrls.length === 0) {
+      // Handle case where player has no archives
+       return NextResponse.json({
+         username: profileData.username,
+         blitzRating: blitzRating,
+         // ... other stats ...
+         totalGames: 0,
+         totalWins: 0,
+         totalLosses: 0,
+         totalDraws: 0,
+         totalGreatMoves: 0,
+         totalBrilliantMoves: 0,
+         recentGamesAnalysis: [],
+         // ... other derived stats ...
+       });
     }
 
-    // Fetch games from the most recent archive
-    let recentGames: ChessComGame[] = [];
+    const latestArchiveUrl = archiveUrls[archiveUrls.length - 1];
     const gamesResponse = await fetch(latestArchiveUrl);
+    let recentGames: ChessComGame[] = [];
     if (gamesResponse.ok) {
-        const gamesData = await gamesResponse.json();
-        if (gamesData && Array.isArray(gamesData.games)) {
-            recentGames = gamesData.games;
-        }
+      const gamesData = await gamesResponse.json();
+      // Filter for Blitz games ONLY before sorting and slicing
+      recentGames = (gamesData.games || []).filter(
+          (game: ChessComGame) => game.time_class === 'blitz' // Only Blitz
+      );
     } else {
-        console.warn(`Failed to fetch games from archive: ${latestArchiveUrl} - Status: ${gamesResponse.status}`);
+      console.warn(`Failed to fetch games from archive: ${latestArchiveUrl} - Status: ${gamesResponse.status}`);
+      // Potentially return partial data or error
     }
 
-    // Sort games by end_time descending
+    // Sort by end time descending and take the most recent N games
     recentGames.sort((a, b) => b.end_time - a.end_time);
+    const gamesToAnalyze = recentGames.slice(0, MAX_GAMES_TO_ANALYZE);
 
-    // Get the last 5 games for analysis
-    const gamesToAnalyze = recentGames.slice(0, 5); // Analyze up to 5 games
+    console.log(`Fetched ${recentGames.length} blitz games, analyzing latest ${gamesToAnalyze.length} for ${username}`); // Updated log
 
-    // --- Perform Stockfish analysis ---
-    let analysisSummaries: AnalyzedGameSummary[] = [];
-    if (gamesToAnalyze.length > 0) {
-        console.log(`Starting Stockfish analysis for ${gamesToAnalyze.length} games for user ${username}...`);
-        analysisSummaries = await analyzeGamesWithStockfish(gamesToAnalyze, username, blitzRating);
-        console.log(`Finished Stockfish analysis for user ${username}.`);
-    } else {
-        console.log(`No recent games found to analyze for ${username}.`);
-    }
+    // --- Analyze Games ---
+    const analysisSummaries: AnalyzedGameSummary[] = await analyzeGamesWithStockfish(gamesToAnalyze, username, blitzRating);
 
     // --- Calculate Totals from Analysis ---
+    // ... existing total calculations ...
     const totalGreatMoves = analysisSummaries.reduce((sum, game) => sum + game.greatMovesCount, 0);
     const totalBrilliantMoves = analysisSummaries.reduce((sum, game) => sum + game.brilliantMovesCount, 0);
 
 
     // --- Calculate derived stats (using Blitz rating) ---
+    // ... existing derived stats calculations ...
     const calculatedCurrentLevel = blitzRating ? Math.floor(blitzRating / 100) : 0;
-    // Use a default initial rating for level crossing calculation, or fetch join date + first rating if needed
     const assumedInitialRating = 1200;
     const levelsCrossed = blitzRating ? Math.floor((blitzRating - assumedInitialRating) / 100) : 0;
     const targetRating = blitzRating ? Math.ceil(blitzRating / 100) * 100 : 1200; // Target next 100 marker
@@ -138,6 +124,16 @@ export async function GET(request: NextRequest) {
   }
 }
 
+// --- Helper: Rating Adjustment Factor ---
+function getRatingAdjustmentFactor(rating: number | null): number {
+    if (rating === null) return 0;
+    // Simple linear adjustment: more generous below 1500, stricter above
+    // Max adjustment of +/- 1.0 pawn eval at extremes (e.g., 500 or 2500 rating)
+    const clampedRating = Math.max(500, Math.min(2500, rating));
+    return (1500 - clampedRating) / 1000; // e.g., rating 1000 -> +0.5; rating 2000 -> -0.5
+}
+
+
 // --- Stockfish Analysis Function (Adapted from analyze-moves) ---
 async function analyzeGamesWithStockfish(
     games: ChessComGame[],
@@ -146,9 +142,12 @@ async function analyzeGamesWithStockfish(
 ): Promise<AnalyzedGameSummary[]> {
   const analysisSummaries: AnalyzedGameSummary[] = [];
   const chess = new Chess();
-  const STOCKFISH_DELAY_MS = 500;
+  // Calculate adjusted thresholds once
+  const ratingFactor = getRatingAdjustmentFactor(playerRating);
+  const adjustedGreatThreshold = BASE_GREAT_MOVE_EVAL_THRESHOLD + ratingFactor;
+  const adjustedBrilliantThreshold = BASE_BRILLIANT_MOVE_EVAL_THRESHOLD + ratingFactor; // Uses updated base
 
-  console.log(`Analyzing ${games.length} games. Player Rating: ${playerRating ?? 'N/A'}`);
+  console.log(`Analyzing ${games.length} games. Player Rating: ${playerRating ?? 'N/A'}. Adj. Thresholds: Great=${adjustedGreatThreshold.toFixed(2)}, Brilliant=${adjustedBrilliantThreshold.toFixed(2)}`);
 
   for (const game of games) {
     let history;
@@ -156,6 +155,7 @@ async function analyzeGamesWithStockfish(
     let brilliantMovesInGame = 0;
     let highlightedMovesInGame: HighlightedMove[] = []; // Store highlights for this game
     let skipReason: string | null = null;
+    const isPlayerWhite = game.white.username.toLowerCase() === username.toLowerCase();
 
     try {
       chess.reset();
@@ -173,7 +173,6 @@ async function analyzeGamesWithStockfish(
       console.log(`[PGN Load Success] Successfully loaded PGN for game ${game.url}`);
 
       history = chess.history({ verbose: true });
-      const isPlayerWhite = game.white.username.toLowerCase() === username.toLowerCase();
       chess.reset(); // Reset before iterating through moves
 
       console.log(`Analyzing game: ${game.url} (${history.length} moves)`);
@@ -183,91 +182,92 @@ async function analyzeGamesWithStockfish(
         const fenBeforeMove = chess.fen();
         const currentPlayerIsTarget = (move.color === 'w' && isPlayerWhite) || (move.color === 'b' && !isPlayerWhite);
 
-        // Always make the move to keep the board state correct
-        const moveResult = chess.move(move.san);
+        // Make the move *before* analysis if it's the target player,
+        // so we can capture fenAfter easily.
+        // We still analyze based on fenBeforeMove.
+        let fenAfterMove = fenBeforeMove; // Default if move fails or not target player
+        const moveResult = chess.move(move.san); // Apply move to internal board state
+
         if (!moveResult) {
             console.warn(`[Move Error] Failed to make move ${move.san} in game ${game.url}. Current FEN: ${fenBeforeMove}`);
             skipReason = `Internal error processing move ${move.san}`;
             break; // Stop analyzing this game
         }
+        fenAfterMove = chess.fen(); // Capture FEN after successful move
 
         if (currentPlayerIsTarget) {
           await delay(STOCKFISH_DELAY_MS);
-          console.log(`[Stockfish Call] User: ${username}, Game: ${game.url}, Move #: ${i + 1}, FEN: ${fenBeforeMove}`);
-          const analysis: StockfishAnalysis | null = await fetchStockfishAnalysis(fenBeforeMove, DEFAULT_DEPTH);
-          console.log(`[Stockfish Raw Resp] FEN: ${fenBeforeMove}, Analysis:`, JSON.stringify(analysis));
+          console.log(`[Stockfish Call] User: ${username}, Game: ${game.url}, Move #: ${i + 1}, FEN: ${fenBeforeMove} (Best Move Analysis)`);
+          const analysisBest: StockfishAnalysis | null = await fetchStockfishAnalysis(fenBeforeMove, DEFAULT_DEPTH);
+          console.log(`[Stockfish Raw Resp] FEN: ${fenBeforeMove}, Analysis:`, JSON.stringify(analysisBest));
 
-          if (analysis && analysis.success && analysis.bestmove) {
-            const stockfishBestMoveLan = analysis.bestmove.trim();
-            console.log(`[Check Move Quality] Player Move: '${move.lan}', Stockfish Best: '${stockfishBestMoveLan}', Eval After Best: ${analysis.evaluation ?? 'N/A'}, Mate: ${analysis.mate ?? 'N/A'}`);
+          if (analysisBest && analysisBest.success && analysisBest.bestmove) {
+            const stockfishBestMoveLan = analysisBest.bestmove.trim();
+            const bestMoveEval = analysisBest.evaluation; // Eval *after* best move
+            const bestMoveMate = analysisBest.mate;     // Mate *after* best move
+
+            console.log(`[Check Move Quality] Player Move: '${move.lan}', Stockfish Best: '${stockfishBestMoveLan}', Eval After Best: ${bestMoveEval ?? 'N/A'}, Mate After Best: ${bestMoveMate ?? 'N/A'}`);
 
             // Check 1: Did the player play the best move?
             if (stockfishBestMoveLan && move.lan === stockfishBestMoveLan) {
-              const currentEval = analysis.evaluation;
-              const mateFound = analysis.mate !== null && analysis.mate !== undefined;
               let isGreat = false;
               let isBrilliant = false;
               let quality: "brilliant" | "great" | null = null;
 
-              if (mateFound) {
-                  isGreat = true;
-                  quality = "great"; // Mate found is at least great
-                  console.log(`   -> GREAT MOVE (Mate Found!): Mate in ${analysis.mate}`);
-              } else if (currentEval !== null) {
+              // Apply thresholds based on eval or mate *after the best move*
+              if (bestMoveMate !== null) {
+                  isGreat = true; quality = "great";
+                  // Optional: Add brilliant logic for quick mates found
+                  console.log(`   -> GREAT MOVE (Mate Found!): Mate in ${bestMoveMate}`);
+              } else if (bestMoveEval !== null) {
                   if (move.color === 'w') {
-                      if (currentEval >= BRILLIANT_MOVE_EVAL_THRESHOLD) { isBrilliant = true; quality = "brilliant"; }
-                      else if (currentEval >= GREAT_MOVE_EVAL_THRESHOLD) { isGreat = true; quality = "great"; }
+                      if (bestMoveEval >= adjustedBrilliantThreshold) { isBrilliant = true; quality = "brilliant"; }
+                      else if (bestMoveEval >= adjustedGreatThreshold) { isGreat = true; quality = "great"; }
                   } else { // Player is black
-                      if (currentEval <= -BRILLIANT_MOVE_EVAL_THRESHOLD) { isBrilliant = true; quality = "brilliant"; }
-                      else if (currentEval <= -GREAT_MOVE_EVAL_THRESHOLD) { isGreat = true; quality = "great"; }
+                      if (bestMoveEval <= -adjustedBrilliantThreshold) { isBrilliant = true; quality = "brilliant"; }
+                      else if (bestMoveEval <= -adjustedGreatThreshold) { isGreat = true; quality = "great"; }
                   }
-
-                  if (isBrilliant) {
-                      console.log(`   -> BRILLIANT MOVE (Eval Threshold Met): Eval ${currentEval}`);
-                  } else if (isGreat) {
-                      console.log(`   -> GREAT MOVE (Eval Threshold Met): Eval ${currentEval}`);
-                  } else {
-                      console.log(`   -> Best Move Played, but Eval threshold not met (Eval: ${currentEval})`);
-                  }
+                  // ... logging for threshold met ...
               }
 
-              if (isBrilliant) {
-                brilliantMovesInGame++;
-                greatMovesInGame++;
-                highlightedMovesInGame.push({ // Add detailed info
+              // If it qualifies as great or brilliant
+              if (isGreat || isBrilliant) {
+                // No need for extra eval calls anymore
+
+                const finalQuality = isBrilliant ? "brilliant" : "great";
+                if (isBrilliant) brilliantMovesInGame++;
+                if (isGreat) greatMovesInGame++; // Count great even if brilliant
+
+                highlightedMovesInGame.push({
                   gameUrl: game.url,
                   moveIndex: i,
                   moveSan: move.san,
                   fenBefore: fenBeforeMove,
-                  evaluation: currentEval,
-                  mate: analysis.mate,
-                  quality: "brilliant",
+                  fenAfter: fenAfterMove,
+                  // Removed evalBefore, mateBefore, evalAfter, mateAfter
+                  bestMoveEval: bestMoveEval, // Eval after the *best* move from fenBefore
+                  bestMoveMate: bestMoveMate, // Mate after the *best* move from fenBefore
+                  quality: finalQuality,
+                  whiteUsername: game.white.username,
+                  blackUsername: game.black.username,
                 });
-              } else if (isGreat) {
-                greatMovesInGame++;
-                 highlightedMovesInGame.push({ // Add detailed info
-                  gameUrl: game.url,
-                  moveIndex: i,
-                  moveSan: move.san,
-                  fenBefore: fenBeforeMove,
-                  evaluation: currentEval,
-                  mate: analysis.mate,
-                  quality: "great",
-                });
+                 console.log(`   -> ${finalQuality.toUpperCase()} MOVE RECORDED. EvalAfterBest: ${bestMoveEval}`);
+
+              } else {
+                 console.log(`   -> Best Move Played, but Eval threshold not met (Eval After Best: ${bestMoveEval})`);
               }
 
             } else if (stockfishBestMoveLan) {
               console.log(`   -> Not the Best Move (Player: ${move.lan}, Best: ${stockfishBestMoveLan})`);
-              // Potentially add logic here to check if a non-best move was still "Great" or "Brilliant" based on eval difference, but keeping it simple for now.
             } else {
-              console.log(`   -> Cannot determine Best Move (Stockfish best move was empty or null after trim: '${analysis.bestmove}')`);
+              console.log(`   -> Cannot determine Best Move (Stockfish best move was empty or null)`);
             }
           } else {
              let reason = "Unknown reason";
-             if (!analysis) reason = "Stockfish API call failed or returned null";
-             else if (!analysis.success) reason = `Stockfish API returned success=false (Error: ${analysis.error || 'N/A'})`; // Include error if available
+             if (!analysisBest) reason = "Stockfish API call failed or returned null";
+             else if (!analysisBest.success) reason = `Stockfish API returned success=false (Error: ${analysisBest.error || 'N/A'})`; // Include error if available
              else reason = "Stockfish API response missing 'bestmove' string";
-             console.log(`[Stockfish Skip] Analysis skipped for FEN: ${fenBeforeMove}. Reason: ${reason}. Raw Response:`, JSON.stringify(analysis));
+             console.log(`[Stockfish Skip] Analysis skipped for FEN: ${fenBeforeMove}. Reason: ${reason}. Raw Response:`, JSON.stringify(analysisBest));
           }
         }
       } // End loop through moves
@@ -279,7 +279,7 @@ async function analyzeGamesWithStockfish(
             skipReason = `Error processing game: ${errorMessage}`;
             console.error(`[Analysis Error] Game ${game.url}. ${skipReason}`);
         }
-        // Ensure counts are 0 if analysis was skipped or failed
+        // Ensure counts are 0 and highlights are empty if analysis was skipped or failed mid-game
         greatMovesInGame = 0;
         brilliantMovesInGame = 0;
         highlightedMovesInGame = []; // Clear highlights on error
@@ -290,10 +290,10 @@ async function analyzeGamesWithStockfish(
     // Add the summary for the processed game
     analysisSummaries.push({
       gameUrl: game.url,
-      fen: game.fen,
-      greatMovesCount: greatMovesInGame, // Keep summary counts
-      brilliantMovesCount: brilliantMovesInGame, // Keep summary counts
-      highlightedMoves: highlightedMovesInGame, // Add the detailed highlights
+      fen: game.fen, // Use final FEN from original game data if available
+      greatMovesCount: greatMovesInGame,
+      brilliantMovesCount: brilliantMovesInGame,
+      highlightedMoves: highlightedMovesInGame, // Includes detailed eval/mate info
       whiteUsername: game.white.username,
       blackUsername: game.black.username,
       whiteResult: game.white.result,

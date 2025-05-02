@@ -74,9 +74,14 @@ export interface HighlightedMove {
   moveIndex: number; // Index in the game's history array
   moveSan: string; // The move played (e.g., "Nf3")
   fenBefore: string; // FEN string of the board *before* the move
-  evaluation: number | null; // Evaluation *after* the best move (or player's move if not best)
-  mate: number | null; // Mate score *after* the best move
+  fenAfter: string; // FEN string of the board *after* the move is made
+  // Removed evalBefore, mateBefore, evalAfter, mateAfter
+  bestMoveEval: number | null; // Evaluation after the *best* move from fenBefore
+  bestMoveMate: number | null; // Mate-in-X after the *best* move from fenBefore
   quality: "brilliant" | "great";
+  // Add opponent info for easier access in the frontend
+  whiteUsername: string;
+  blackUsername: string;
 }
 
 // Updated PlayerData
@@ -104,7 +109,7 @@ export interface AnalyzedGameSummary {
   fen: string; // Final FEN from game data
   greatMovesCount: number; // Kept for backward compatibility or quick summary
   brilliantMovesCount: number; // Kept for backward compatibility or quick summary
-  highlightedMoves: HighlightedMove[]; // Add this line to store detailed moves
+  highlightedMoves: HighlightedMove[]; // This now includes fenAfter and opponent info
   whiteUsername: string;
   blackUsername: string;
   whiteResult: string;
