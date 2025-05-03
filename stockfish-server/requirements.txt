@@ -1,2 +1,3 @@
 Flask<4.0,>=3.0
 stockfish<4.0,>=3.28
+flask-cors

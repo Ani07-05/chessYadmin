@@ -3,7 +3,7 @@ import type { StockfishAnalysis } from "./types";
 // !!! IMPORTANT: Replace this URL with the actual URL of your hosted Stockfish container API !!!
 const STOCKFISH_API_URL = "http://195.35.20.4:5000/analyze"; // Keep the endpoint path
 // const STOCKFISH_API_URL = "http://localhost:5000/analyze"; // Changed to localhost
-export const DEFAULT_DEPTH = 15; // Default depth, adjust if needed
+export const DEFAULT_DEPTH = 10; // Default depth, adjust if needed
 
 /**
  * Fetches analysis from the external Stockfish API for a given FEN position.
